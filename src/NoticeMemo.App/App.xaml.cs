@@ -162,7 +162,9 @@ public partial class App : Application
         viewModel.Initialize();
         viewModel.UpdateCaptureStatus(
             enabled: true,
-            autoSaveHighConfidence: true);
+            autoSaveHighConfidence: true,
+            qqNotificationActive: true,
+            clipboardCaptureActive: true);
         window.Show();
         window.ContentRendered += (_, _) => window.Dispatcher.BeginInvoke(
             new Action(() =>

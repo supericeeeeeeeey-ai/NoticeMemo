@@ -12,9 +12,14 @@ public sealed class AppHost : IDisposable
     private readonly MainViewModel _viewModel;
     private readonly SettingsStore _settingsStore;
     private readonly ClipboardMonitor _clipboardMonitor;
+    private readonly WindowsNotificationMonitor _notificationMonitor;
+    private readonly ReminderService _reminderService;
     private AppSettings _settings;
     private TrayService? _tray;
     private bool _monitoringActive;
+    private bool _notificationMonitoringActive;
+    private bool _notificationStartInProgress;
+    private bool _notificationWarningShown;
     private readonly List<PendingCapture> _pendingCaptures = [];
     private bool _disposed;
     private bool _viewModelDisposed;
@@ -31,10 +36,15 @@ public sealed class AppHost : IDisposable
         _settingsStore = settingsStore;
         _settings = settings.Clone();
         _clipboardMonitor = clipboardMonitor;
+        _notificationMonitor = new WindowsNotificationMonitor();
+        _reminderService = new ReminderService(viewModel, () => _settings);
 
         _window.SettingsRequested += OnSettingsRequested;
         _window.HiddenToTray += OnHiddenToTray;
         _clipboardMonitor.TextCaptured += OnClipboardTextCaptured;
+        _notificationMonitor.NotificationCaptured += OnQqNotificationCaptured;
+        _notificationMonitor.StatusChanged += OnNotificationMonitorStatusChanged;
+        _reminderService.ReminderDue += OnReminderDue;
     }
 
     public void Start(bool startHidden)
@@ -49,11 +59,18 @@ public sealed class AppHost : IDisposable
             TryStartMonitoring(showError: false);
         }
 
-        UpdateCaptureStatus();
         if (!startHidden)
         {
             _window.ShowAndActivate();
         }
+
+        if (_settings.QqNotificationMonitoringEnabled)
+        {
+            _ = TryStartNotificationMonitoringAsync();
+        }
+
+        _reminderService.Start();
+        UpdateCaptureStatus();
     }
 
     public void ShowWindow()
@@ -112,7 +129,92 @@ public sealed class AppHost : IDisposable
         }
     }
 
-    private void HandleCapturedText(string text)
+    private void OnQqNotificationCaptured(object? sender, QqNotificationCapturedEventArgs e)
+    {
+        if (_disposed || !_notificationMonitor.IsRunning || !_settings.QqNotificationMonitoringEnabled)
+        {
+            return;
+        }
+
+        var chatName = e.ChatName.Trim();
+        if (chatName.Length == 0 || !SourceGroupMatcher.IsMatch(chatName, _settings.SourceGroup))
+        {
+            return;
+        }
+
+        try
+        {
+            HandleCapturedText(e.Text, chatName, "QQ 通知");
+        }
+        catch (Exception exception)
+        {
+            _viewModel.StatusMessage = $"处理 QQ 通知失败：{exception.Message}";
+            if (_settings.ShowTrayNotifications)
+            {
+                _tray?.ShowError("NoticeMemo 捕获失败", exception.Message);
+            }
+        }
+    }
+
+    private void OnNotificationMonitorStatusChanged(object? sender, NotificationMonitorStatusEventArgs e)
+    {
+        _notificationMonitoringActive = e.IsActive;
+        UpdateCaptureStatus();
+        if (e.IsActive)
+        {
+            _viewModel.StatusMessage = e.Message;
+            return;
+        }
+
+        _viewModel.StatusMessage = e.Message;
+        if (_settings.QqNotificationMonitoringEnabled && !_notificationWarningShown)
+        {
+            _notificationWarningShown = true;
+            if (_settings.ShowTrayNotifications)
+            {
+                _tray?.ShowError("QQ 自动监听未启用", e.Message);
+            }
+        }
+    }
+
+    private void OnReminderDue(object? sender, ReminderDueEventArgs e)
+    {
+        if (_disposed || !_settings.RemindersEnabled || !_settings.ShowTrayNotifications || _tray is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var first = e.Memos[0];
+            var now = DateTimeOffset.Now;
+            var lines = e.Memos.Select(memo =>
+            {
+                var decision = ReminderPolicy.Evaluate(memo, _settings.ReminderLeadMinutes, now);
+                var timing = decision.IsOverdue ? "已到期" : memo.DueLabel;
+                return $"{timing}｜{memo.Title}";
+            });
+            var title = e.Memos.Count == 1 ? "日程备忘录提醒" : $"{e.Memos.Count} 条备忘录即将到期";
+            var message = string.Join('\n', lines);
+
+            _tray.ShowNotification(title, message, () =>
+            {
+                ShowWindow();
+                _viewModel.SelectMemoById(first.Id);
+            });
+            _viewModel.MarkReminderSent(e.Memos.Select(memo => memo.Id), now);
+            _viewModel.StatusMessage = e.Memos.Count == 1
+                ? $"已提醒：{first.Title}"
+                : $"已提醒 {e.Memos.Count} 条即将到期的备忘录。";
+        }
+        catch (Exception exception)
+        {
+            _viewModel.StatusMessage = $"日程提醒失败：{exception.Message}";
+            _tray?.ShowError("NoticeMemo 提醒失败", exception.Message);
+        }
+    }
+
+    private void HandleCapturedText(string text, string? detectedGroup = null, string origin = "剪贴板")
     {
         var normalized = text.Trim();
         var assessment = NoticeCaptureFilter.Evaluate(normalized);
@@ -121,7 +223,10 @@ public sealed class AppHost : IDisposable
             return;
         }
 
-        var hash = NoticeParser.ComputeSourceHash(_settings.SourceGroup, normalized);
+        var sourceGroup = string.IsNullOrWhiteSpace(detectedGroup)
+            ? _settings.SourceGroup
+            : detectedGroup.Trim();
+        var hash = NoticeParser.ComputeSourceHash(sourceGroup, normalized);
         if (_viewModel.ContainsSourceHash(hash))
         {
             RemovePendingCapture(hash);
@@ -138,15 +243,17 @@ public sealed class AppHost : IDisposable
                              assessment.Confidence == CaptureConfidence.High;
         if (!shouldAutoSave)
         {
-            EnqueuePendingCapture(normalized, hash);
+            EnqueuePendingCapture(normalized, hash, sourceGroup, origin);
             return;
         }
 
-        var memo = NoticeParser.Parse(normalized, _settings.SourceGroup).ToMemo();
+        var memo = NoticeParser.Parse(normalized, sourceGroup).ToMemo();
         var result = _viewModel.AddImportedMemo(
             memo,
             focus: false,
-            successMessage: $"后台已自动收录：{memo.Title}");
+            successMessage: origin == "QQ 通知"
+                ? $"QQ 群「{sourceGroup}」已自动收录：{memo.Title}"
+                : $"后台已自动收录：{memo.Title}");
 
         if (!result.Success)
         {
@@ -156,22 +263,29 @@ public sealed class AppHost : IDisposable
         RemovePendingCapture(hash);
         if (_settings.ShowTrayNotifications)
         {
-            _tray?.ShowNotification("已自动收录通知", memo.Title, ShowWindow);
+            _tray?.ShowNotification(
+                origin == "QQ 通知" ? "QQ 通知已自动收录" : "已自动收录通知",
+                memo.Title,
+                () =>
+                {
+                    ShowWindow();
+                    _viewModel.SelectMemoById(memo.Id);
+                });
         }
     }
 
-    private void EnqueuePendingCapture(string text, string hash)
+    private void EnqueuePendingCapture(string text, string hash, string sourceGroup, string origin)
     {
-        _pendingCaptures.Add(new PendingCapture(text, hash));
+        _pendingCaptures.Add(new PendingCapture(text, hash, sourceGroup, origin));
         UpdatePendingCaptureMenu();
         _viewModel.StatusMessage = _pendingCaptures.Count == 1
-            ? "已捕获一条通知，可在托盘菜单中确认解析结果。"
+            ? $"已捕获一条{origin}，可在托盘菜单中确认解析结果。"
             : $"已捕获 {_pendingCaptures.Count} 条待确认通知。";
 
         if (_settings.ShowTrayNotifications)
         {
             _tray?.ShowNotification(
-                "捕获到一条通知",
+                origin == "QQ 通知" ? "捕获到一条 QQ 通知" : "捕获到一条通知",
                 "点击确认并检查解析结果。",
                 ConfirmPendingCapture);
         }
@@ -199,7 +313,7 @@ public sealed class AppHost : IDisposable
         }
 
         var pending = _pendingCaptures[0];
-        if (_window.ImportPendingText(pending.Text))
+        if (_window.ImportPendingText(pending.Text, pending.SourceGroup))
         {
             _pendingCaptures.RemoveAt(0);
             UpdatePendingCaptureMenu();
@@ -208,21 +322,30 @@ public sealed class AppHost : IDisposable
 
     private void ToggleMonitoring()
     {
-        if (_monitoringActive)
+        var anyActive = (_monitoringActive && _settings.ClipboardMonitoringEnabled) ||
+                        (_notificationMonitoringActive && _settings.QqNotificationMonitoringEnabled);
+        if (anyActive)
         {
             _clipboardMonitor.Stop();
             _monitoringActive = false;
+            _notificationMonitor.Stop();
+            _notificationMonitoringActive = false;
             _settings.ClipboardMonitoringEnabled = false;
+            _settings.QqNotificationMonitoringEnabled = false;
             _viewModel.StatusMessage = "自动捕获已暂停，已保留托盘入口。";
         }
         else
         {
-            if (!TryStartMonitoring(showError: true))
+            _settings.ClipboardMonitoringEnabled = true;
+            if (!TryStartMonitoring(showError: false))
             {
-                return;
+                _settings.ClipboardMonitoringEnabled = false;
             }
 
-            _settings.ClipboardMonitoringEnabled = true;
+            _settings.QqNotificationMonitoringEnabled = true;
+            _notificationWarningShown = false;
+            _ = TryStartNotificationMonitoringAsync();
+
             _viewModel.StatusMessage = "自动捕获已恢复。";
         }
 
@@ -247,6 +370,42 @@ public sealed class AppHost : IDisposable
             }
 
             return false;
+        }
+    }
+
+    private async Task<bool> TryStartNotificationMonitoringAsync()
+    {
+        if (_disposed || !_settings.QqNotificationMonitoringEnabled)
+        {
+            return false;
+        }
+
+        if (_notificationMonitoringActive)
+        {
+            return true;
+        }
+
+        if (_notificationStartInProgress)
+        {
+            return false;
+        }
+
+        _notificationStartInProgress = true;
+        try
+        {
+            var started = await _notificationMonitor.StartAsync();
+            _notificationMonitoringActive = started;
+            if (started)
+            {
+                _notificationWarningShown = false;
+            }
+
+            UpdateCaptureStatus();
+            return started;
+        }
+        finally
+        {
+            _notificationStartInProgress = false;
         }
     }
 
@@ -297,6 +456,21 @@ public sealed class AppHost : IDisposable
             _monitoringActive = false;
         }
 
+        if (_settings.QqNotificationMonitoringEnabled)
+        {
+            _ = TryStartNotificationMonitoringAsync();
+        }
+        else
+        {
+            _notificationMonitor.Stop();
+            _notificationMonitoringActive = false;
+        }
+
+        if (_settings.RemindersEnabled)
+        {
+            _reminderService.CheckNow();
+        }
+
         SaveSettings(showError: true);
         UpdateCaptureStatus();
 
@@ -337,8 +511,14 @@ public sealed class AppHost : IDisposable
 
     private void UpdateCaptureStatus()
     {
-        var active = _monitoringActive && _settings.ClipboardMonitoringEnabled;
-        _viewModel.UpdateCaptureStatus(active, _settings.AutoSaveHighConfidence);
+        var clipboardActive = _monitoringActive && _settings.ClipboardMonitoringEnabled;
+        var notificationActive = _notificationMonitoringActive && _settings.QqNotificationMonitoringEnabled;
+        var active = clipboardActive || notificationActive;
+        _viewModel.UpdateCaptureStatus(
+            active,
+            _settings.AutoSaveHighConfidence,
+            notificationActive,
+            clipboardActive);
         _tray?.SetMonitoringEnabled(active);
     }
 
@@ -381,7 +561,7 @@ public sealed class AppHost : IDisposable
         }
     }
 
-    private sealed record PendingCapture(string Text, string Hash);
+    private sealed record PendingCapture(string Text, string Hash, string SourceGroup, string Origin);
 
     public void Dispose()
     {
@@ -394,7 +574,12 @@ public sealed class AppHost : IDisposable
         _window.SettingsRequested -= OnSettingsRequested;
         _window.HiddenToTray -= OnHiddenToTray;
         _clipboardMonitor.TextCaptured -= OnClipboardTextCaptured;
+        _notificationMonitor.NotificationCaptured -= OnQqNotificationCaptured;
+        _notificationMonitor.StatusChanged -= OnNotificationMonitorStatusChanged;
+        _reminderService.ReminderDue -= OnReminderDue;
         _clipboardMonitor.Dispose();
+        _notificationMonitor.Dispose();
+        _reminderService.Dispose();
         _tray?.Dispose();
         _tray = null;
 

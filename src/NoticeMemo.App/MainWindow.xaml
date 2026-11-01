@@ -236,7 +236,7 @@
                                 <Border Background="{StaticResource SurfaceAltBrush}" BorderBrush="{StaticResource LineBrush}" BorderThickness="1" CornerRadius="16" Padding="24" VerticalAlignment="Top" Visibility="{Binding IsListEmpty, Converter={StaticResource BoolToVisibility}}">
                                     <StackPanel>
                                         <TextBlock Text="还没有备忘录" FontSize="18" FontWeight="SemiBold" />
-                                        <TextBlock Text="复制学院群里的通知，NoticeMemo 会在后台识别并收录。" Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,7,0,16" />
+                                        <TextBlock Text="开启 QQ 系统通知监听后，NoticeMemo 会在后台识别并收录；也可以复制通知作为兜底。" Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,7,0,16" />
                                         <Button Content="从剪贴板导入" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Left" Click="ImportClipboard_Click" />
                                     </StackPanel>
                                 </Border>

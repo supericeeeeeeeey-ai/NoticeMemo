@@ -11,6 +11,8 @@ var tests = new (string Name, Action Body)[]
     ("来源哈希稳定", SourceHashIsStable),
     ("捕获过滤器识别高置信度通知", CaptureFilterAcceptsNotice),
     ("捕获过滤器忽略普通文本", CaptureFilterRejectsOrdinaryText),
+    ("来源群聊名称匹配", SourceGroupMatching),
+    ("提醒触发窗口与去重", ReminderPolicyWindow),
     ("设置持久化与规范化", SettingsRoundTrip),
     ("SQLite 增删改查", SqliteRoundTrip),
     ("JSON 存储回退", JsonRoundTrip),
@@ -122,6 +124,42 @@ static void CaptureFilterRejectsOrdinaryText()
     AssertTrue(!codeAssessment.IsNotice);
 }
 
+static void SourceGroupMatching()
+{
+    AssertTrue(SourceGroupMatcher.IsMatch("XX学院 2026 级通知群", "学院通知群"));
+    AssertTrue(SourceGroupMatcher.IsMatch("学院通知群", "学院通知群"));
+    AssertTrue(!SourceGroupMatcher.IsMatch("网安2603聊天群", "学院通知群"));
+    AssertTrue(!SourceGroupMatcher.IsMatch("", "学院通知群"));
+}
+
+static void ReminderPolicyWindow()
+{
+    var now = new DateTimeOffset(2026, 11, 2, 10, 0, 0, TimeSpan.FromHours(8));
+    var memo = new Memo
+    {
+        Status = MemoStatus.Inbox,
+        DueAt = now.AddMinutes(20)
+    };
+
+    var upcoming = ReminderPolicy.Evaluate(memo, 30, now);
+    AssertTrue(upcoming.ShouldRemind);
+    AssertTrue(!upcoming.IsOverdue);
+
+    AssertTrue(!ReminderPolicy.Evaluate(memo, 10, now).ShouldRemind);
+
+    memo.DueAt = now.AddMinutes(-5);
+    var overdue = ReminderPolicy.Evaluate(memo, 30, now);
+    AssertTrue(overdue.ShouldRemind);
+    AssertTrue(overdue.IsOverdue);
+
+    memo.ReminderSentAt = now;
+    AssertTrue(!ReminderPolicy.Evaluate(memo, 30, now).ShouldRemind);
+
+    memo.ReminderSentAt = null;
+    memo.Status = MemoStatus.Done;
+    AssertTrue(!ReminderPolicy.Evaluate(memo, 30, now).ShouldRemind);
+}
+
 static void SettingsRoundTrip()
 {
     var directory = CreateTempDirectory();
@@ -132,8 +170,11 @@ static void SettingsRoundTrip()
         store.Save(new AppSettings
         {
             ClipboardMonitoringEnabled = false,
+            QqNotificationMonitoringEnabled = false,
             AutoSaveHighConfidence = false,
             ShowTrayNotifications = false,
+            RemindersEnabled = false,
+            ReminderLeadMinutes = 45,
             StartWithWindows = true,
             TrayHintShown = true,
             SourceGroup = "  学院通知群  "
@@ -142,8 +183,11 @@ static void SettingsRoundTrip()
         var loaded = store.Load();
         AssertEqual("学院通知群", loaded.SourceGroup);
         AssertTrue(!loaded.ClipboardMonitoringEnabled);
+        AssertTrue(!loaded.QqNotificationMonitoringEnabled);
         AssertTrue(!loaded.AutoSaveHighConfidence);
         AssertTrue(!loaded.ShowTrayNotifications);
+        AssertTrue(!loaded.RemindersEnabled);
+        AssertEqual(45, loaded.ReminderLeadMinutes);
         AssertTrue(loaded.StartWithWindows);
         AssertTrue(loaded.TrayHintShown);
     }
@@ -169,6 +213,9 @@ static void SqliteRoundTrip()
         AssertEqual(2, loaded.Links.Count);
         AssertEqual(2, loaded.Tags.Count);
         AssertEqual(memo.DueAt?.ToUnixTimeSeconds(), loaded.DueAt?.ToUnixTimeSeconds());
+        loaded.ReminderSentAt = new DateTimeOffset(2026, 11, 3, 16, 30, 0, TimeSpan.FromHours(8));
+        store.Upsert(loaded);
+        AssertEqual(loaded.ReminderSentAt?.ToUnixTimeSeconds(), store.Get(memo.Id)?.ReminderSentAt?.ToUnixTimeSeconds());
 
         loaded.Status = MemoStatus.Done;
         loaded.CompletedAt = DateTimeOffset.Now;

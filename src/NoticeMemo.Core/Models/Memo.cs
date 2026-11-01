@@ -37,6 +37,8 @@ public sealed class Memo
 
     public DateTimeOffset? CompletedAt { get; set; }
 
+    public DateTimeOffset? ReminderSentAt { get; set; }
+
     public bool IsInbox => Status == MemoStatus.Inbox;
 
     public bool IsActive => Status == MemoStatus.Active;

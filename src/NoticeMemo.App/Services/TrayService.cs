@@ -47,7 +47,7 @@ public sealed class TrayService : IDisposable
         _notifyIcon = new Forms.NotifyIcon
         {
             Icon = _icon,
-            Text = "NoticeMemo · 后台通知捕获",
+            Text = "NoticeMemo · QQ 通知与剪贴板监听",
             ContextMenuStrip = _menu,
             Visible = true
         };
@@ -83,7 +83,7 @@ public sealed class TrayService : IDisposable
     {
         _toggleMonitoringItem.Text = enabled ? "暂停自动捕获" : "恢复自动捕获";
         _notifyIcon.Text = enabled
-            ? "NoticeMemo · 后台通知捕获中"
+            ? "NoticeMemo · QQ 通知与剪贴板监听中"
             : "NoticeMemo · 自动捕获已暂停";
     }
 

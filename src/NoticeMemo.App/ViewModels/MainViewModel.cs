@@ -29,6 +29,8 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     private bool _initialized;
     private bool _captureEnabled;
     private bool _autoSaveHighConfidence;
+    private bool _clipboardCaptureActive;
+    private bool _qqNotificationActive;
 
     public MainViewModel(IMemoStore store)
     {
@@ -141,11 +143,26 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
 
     public string CaptureStatusLabel => _captureEnabled ? "后台自动捕获中" : "自动捕获已暂停";
 
-    public string CaptureStatusDetail => _captureEnabled
-        ? _autoSaveHighConfidence
-            ? "高置信度通知会自动收录"
-            : "捕获后通过托盘确认"
-        : "可从托盘或设置中恢复";
+    public string CaptureStatusDetail
+    {
+        get
+        {
+            if (!_captureEnabled)
+            {
+                return "可从托盘或设置中恢复";
+            }
+
+            var source = (_clipboardCaptureActive, _qqNotificationActive) switch
+            {
+                (true, true) => "QQ 通知 + 剪贴板",
+                (false, true) => "QQ 通知",
+                _ => "剪贴板"
+            };
+            return _autoSaveHighConfidence
+                ? $"{source} · 高置信度自动收录"
+                : $"{source} · 捕获后确认";
+        }
+    }
 
     public string CaptureIndicatorColor => _captureEnabled ? "#7CB58B" : "#B7791F";
 
@@ -161,10 +178,16 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
         StatusMessage = "数据只保存在这台电脑上。";
     }
 
-    public void UpdateCaptureStatus(bool enabled, bool autoSaveHighConfidence)
+    public void UpdateCaptureStatus(
+        bool enabled,
+        bool autoSaveHighConfidence,
+        bool qqNotificationActive = false,
+        bool clipboardCaptureActive = true)
     {
         _captureEnabled = enabled;
         _autoSaveHighConfidence = autoSaveHighConfidence;
+        _clipboardCaptureActive = clipboardCaptureActive;
+        _qqNotificationActive = qqNotificationActive;
         OnPropertyChanged(nameof(CaptureStatusLabel));
         OnPropertyChanged(nameof(CaptureStatusDetail));
         OnPropertyChanged(nameof(CaptureIndicatorColor));
@@ -268,6 +291,43 @@ public sealed class MainViewModel : ViewModelBase, IDisposable
     public string? GetSelectedMarkdown()
     {
         return SelectedMemo is null ? null : MarkdownExporter.Render(SelectedMemo);
+    }
+
+    public IReadOnlyList<Memo> GetMemosSnapshot() => _allMemos.ToList();
+
+    public void MarkReminderSent(IEnumerable<string> memoIds, DateTimeOffset sentAt)
+    {
+        var selectedId = SelectedMemo?.Id;
+        foreach (var memoId in memoIds.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var memo = _allMemos.FirstOrDefault(item => item.Id == memoId);
+            if (memo is null)
+            {
+                continue;
+            }
+
+            memo.ReminderSentAt = sentAt;
+            memo.UpdatedAt = sentAt;
+            _store.Upsert(memo);
+        }
+
+        Reload(selectedId);
+    }
+
+    public void SelectMemoById(string memoId)
+    {
+        if (CurrentFilter != MemoFilter.All)
+        {
+            CurrentFilter = MemoFilter.All;
+        }
+
+        if (!string.IsNullOrWhiteSpace(SearchText))
+        {
+            SearchText = "";
+        }
+
+        ApplyFilter(memoId);
+        SelectedMemo = VisibleMemos.FirstOrDefault(memo => memo.Id == memoId);
     }
 
     public ExportResult ExportAll()

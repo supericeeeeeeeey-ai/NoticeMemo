@@ -63,12 +63,15 @@ public sealed class SqliteMemoStore : IMemoStore
                 source_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                completed_at TEXT NULL
+                completed_at TEXT NULL,
+                reminder_sent_at TEXT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_memos_status ON memos(status);
             CREATE INDEX IF NOT EXISTS idx_memos_due ON memos(due_at);
             CREATE INDEX IF NOT EXISTS idx_memos_hash ON memos(source_hash);
             """);
+
+        EnsureColumn("reminder_sent_at", "TEXT NULL");
     }
 
     public string Location { get; }
@@ -83,7 +86,7 @@ public sealed class SqliteMemoStore : IMemoStore
             using var statement = Prepare("""
                 SELECT id, title, body, category, due_at, location, links, tags,
                        priority, status, source_group, source_text, source_hash,
-                       created_at, updated_at, completed_at
+                       created_at, updated_at, completed_at, reminder_sent_at
                 FROM memos
                 ORDER BY CASE WHEN status = 2 THEN 1 ELSE 0 END,
                          CASE WHEN due_at IS NULL THEN 1 ELSE 0 END,
@@ -108,7 +111,7 @@ public sealed class SqliteMemoStore : IMemoStore
             using var statement = Prepare("""
                 SELECT id, title, body, category, due_at, location, links, tags,
                        priority, status, source_group, source_text, source_hash,
-                       created_at, updated_at, completed_at
+                       created_at, updated_at, completed_at, reminder_sent_at
                 FROM memos WHERE id = $id LIMIT 1;
                 """);
             Bind(statement, 1, id);
@@ -125,11 +128,11 @@ public sealed class SqliteMemoStore : IMemoStore
                 INSERT OR REPLACE INTO memos (
                     id, title, body, category, due_at, location, links, tags,
                     priority, status, source_group, source_text, source_hash,
-                    created_at, updated_at, completed_at
+                    created_at, updated_at, completed_at, reminder_sent_at
                 ) VALUES (
                     $id, $title, $body, $category, $due, $location, $links, $tags,
                     $priority, $status, $source_group, $source_text, $source_hash,
-                    $created, $updated, $completed
+                    $created, $updated, $completed, $reminder_sent
                 );
                 """);
 
@@ -149,6 +152,7 @@ public sealed class SqliteMemoStore : IMemoStore
             Bind(statement, 14, memo.CreatedAt.ToString("O", CultureInfo.InvariantCulture));
             Bind(statement, 15, memo.UpdatedAt.ToString("O", CultureInfo.InvariantCulture));
             Bind(statement, 16, memo.CompletedAt?.ToString("O", CultureInfo.InvariantCulture));
+            Bind(statement, 17, memo.ReminderSentAt?.ToString("O", CultureInfo.InvariantCulture));
             StepToDone(statement);
         }
     }
@@ -198,8 +202,23 @@ public sealed class SqliteMemoStore : IMemoStore
             SourceHash = ReadString(statement, 12),
             CreatedAt = ReadDate(statement, 13) ?? DateTimeOffset.Now,
             UpdatedAt = ReadDate(statement, 14) ?? DateTimeOffset.Now,
-            CompletedAt = ReadDate(statement, 15)
+            CompletedAt = ReadDate(statement, 15),
+            ReminderSentAt = ReadDate(statement, 16)
         };
+    }
+
+    private void EnsureColumn(string columnName, string declaration)
+    {
+        using var statement = Prepare("PRAGMA table_info(memos);");
+        while (Step(statement) == SqliteRow)
+        {
+            if (string.Equals(ReadString(statement, 1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        ExecuteScript($"ALTER TABLE memos ADD COLUMN {columnName} {declaration};");
     }
 
     private static List<string> DeserializeList(string value)

@@ -4,9 +4,15 @@ public sealed class AppSettings
 {
     public bool ClipboardMonitoringEnabled { get; set; } = true;
 
+    public bool QqNotificationMonitoringEnabled { get; set; } = true;
+
     public bool AutoSaveHighConfidence { get; set; } = true;
 
     public bool ShowTrayNotifications { get; set; } = true;
+
+    public bool RemindersEnabled { get; set; } = true;
+
+    public int ReminderLeadMinutes { get; set; } = 30;
 
     public bool StartWithWindows { get; set; }
 
@@ -17,8 +23,11 @@ public sealed class AppSettings
     public AppSettings Clone() => new()
     {
         ClipboardMonitoringEnabled = ClipboardMonitoringEnabled,
+        QqNotificationMonitoringEnabled = QqNotificationMonitoringEnabled,
         AutoSaveHighConfidence = AutoSaveHighConfidence,
         ShowTrayNotifications = ShowTrayNotifications,
+        RemindersEnabled = RemindersEnabled,
+        ReminderLeadMinutes = ReminderLeadMinutes,
         StartWithWindows = StartWithWindows,
         TrayHintShown = TrayHintShown,
         SourceGroup = SourceGroup
@@ -34,5 +43,7 @@ public sealed class AppSettings
         {
             SourceGroup = SourceGroup[..60];
         }
+
+        ReminderLeadMinutes = Math.Clamp(ReminderLeadMinutes, 0, 7 * 24 * 60);
     }
 }

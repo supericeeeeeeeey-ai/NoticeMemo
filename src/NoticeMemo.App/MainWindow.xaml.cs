@@ -191,10 +191,10 @@ public partial class MainWindow : Window
         OpenImport(GetClipboardText());
     }
 
-    public bool ImportPendingText(string text)
+    public bool ImportPendingText(string text, string sourceGroup)
     {
         ShowAndActivate();
-        return OpenImport(text);
+        return OpenImport(text, sourceGroup);
     }
 
     public void PrepareForExit()
@@ -202,9 +202,11 @@ public partial class MainWindow : Window
         _exitRequested = true;
     }
 
-    private bool OpenImport(string initialText)
+    private bool OpenImport(string initialText, string? sourceGroup = null)
     {
-        var dialog = new ImportDialog(initialText, DefaultSourceGroup) { Owner = this };
+        var dialog = new ImportDialog(
+            initialText,
+            string.IsNullOrWhiteSpace(sourceGroup) ? DefaultSourceGroup : sourceGroup) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.ResultMemo is not { } memo)
         {
             return false;
