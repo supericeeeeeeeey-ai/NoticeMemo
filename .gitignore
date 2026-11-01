@@ -1,0 +1,39 @@
+# Build output
+bin/
+obj/
+artifacts/
+outputs/
+
+# Local development and packaging
+work/
+.vs/
+.idea/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Test and coverage output
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Runtime data, logs, and temporary files
+*.db
+*.db-shm
+*.db-wal
+*.json.tmp
+*.log
+*.tmp
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Published binaries should be attached to GitHub Releases
+*.exe
+*.pdb
+*.msi
+*.msix
+

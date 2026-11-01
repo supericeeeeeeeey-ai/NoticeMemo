@@ -1,0 +1,61 @@
+name: Build and test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1"
+
+jobs:
+  build:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore NoticeMemo.slnx --configfile .github/NuGet.Config --disable-parallel -m:1
+
+      - name: Build
+        run: dotnet build NoticeMemo.slnx -c Release --no-restore -m:1
+
+      - name: Run tests
+        run: dotnet run --project tests/NoticeMemo.Core.Tests/NoticeMemo.Core.Tests.csproj -c Release --no-build --no-restore
+
+      - name: Restore Windows runtime packs
+        run: dotnet restore src/NoticeMemo.App/NoticeMemo.App.csproj -r win-x64 --configfile .github/NuGet.Config
+
+      - name: Publish single-file executable
+        run: >
+          dotnet publish src/NoticeMemo.App/NoticeMemo.App.csproj
+          -c Release -r win-x64 --self-contained true --no-restore
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=None -p:DebugSymbols=false
+          -o artifacts/NoticeMemo-win-x64
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoticeMemo-win-x64
+          path: artifacts/NoticeMemo-win-x64/NoticeMemo.exe
+          if-no-files-found: error
+          retention-days: 14
+

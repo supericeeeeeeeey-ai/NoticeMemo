@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NoticeMemo.App/NoticeMemo.App.csproj" />
+    <Project Path="src/NoticeMemo.Core/NoticeMemo.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/NoticeMemo.Core.Tests/NoticeMemo.Core.Tests.csproj" />
+  </Folder>
+</Solution>
